@@ -156,10 +156,10 @@ pub fn decode_storage(metadata: &Metadata) -> StorageDecoder {
 /// assert_eq!(extrinsics_cursor.len(), 0);
 /// assert_eq!(extrinsics.len(), 3);
 /// ```
-pub fn decode_extrinsics<'a>(
+pub fn decode_extrinsics<'a, 'b>(
 	metadata: &'a Metadata,
-	data: &mut &[u8],
-) -> Result<Vec<Extrinsic<'a>>, (Vec<Extrinsic<'a>>, DecodeError)> {
+	data: &mut &'b[u8],
+) -> Result<Vec<Extrinsic<'a, 'b>>, (Vec<Extrinsic<'a, 'b>>, DecodeError)> {
 	let extrinsic_bytes = AllExtrinsicBytes::new(*data).map_err(|e| (Vec::new(), e.into()))?;
 
 	log::trace!("Decoding {} Total Extrinsics.", extrinsic_bytes.len());
@@ -222,7 +222,7 @@ pub fn decode_extrinsics<'a>(
 /// assert_eq!(extrinsic.call_data.pallet_name, "Auctions");
 /// assert_eq!(&*extrinsic.call_data.ty.name(), "bid");
 /// ```
-pub fn decode_extrinsic<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<Extrinsic<'a>, DecodeError> {
+pub fn decode_extrinsic<'a, 'b>(metadata: &'a Metadata, data: &mut &'b [u8]) -> Result<Extrinsic<'a, 'b>, DecodeError> {
 	// Ignore the expected extrinsic length here at the moment, since `decode_unwrapped_extrinsic` will
 	// error accordingly if the wrong number of bytes are consumed.
 	let _len = <Compact<u32>>::decode(data)?;
@@ -258,7 +258,7 @@ pub fn decode_extrinsic<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<
 /// assert_eq!(extrinsic.call_data.pallet_name, "Auctions");
 /// assert_eq!(&*extrinsic.call_data.ty.name(), "bid");
 /// ```
-pub fn decode_unwrapped_extrinsic<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<Extrinsic<'a>, DecodeError> {
+pub fn decode_unwrapped_extrinsic<'a, 'b>(metadata: &'a Metadata, data: &mut &'b [u8]) -> Result<Extrinsic<'a, 'b>, DecodeError> {
 	if data.is_empty() {
 		return Err(DecodeError::EarlyEof("unwrapped extrinsic byte length should be > 0"));
 	}
@@ -327,7 +327,7 @@ pub fn decode_unwrapped_extrinsic<'a>(metadata: &'a Metadata, data: &mut &[u8]) 
 /// assert_eq!(call_data.pallet_name, "Auctions");
 /// assert_eq!(&*call_data.ty.name(), "bid");
 /// ```
-pub fn decode_call_data<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<CallData<'a>, DecodeError> {
+pub fn decode_call_data<'a, 'b>(metadata: &'a Metadata, data: &mut &'b [u8]) -> Result<CallData<'a, 'b>, DecodeError> {
 	// Pluck out the u8's representing the pallet and call enum next.
 	if data.len() < 2 {
 		return Err(DecodeError::EarlyEof("expected at least 2 more bytes for the pallet/call index"));
@@ -342,6 +342,7 @@ pub fn decode_call_data<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<
 		None => return Err(DecodeError::CannotFindCall(pallet_index, call_index)),
 	};
 
+	let raw_arguments = *data;
 	// Decode each of the argument values in the extrinsic:
 	let arguments = variant
 		.fields()
@@ -352,12 +353,12 @@ pub fn decode_call_data<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<
 		})
 		.collect::<Result<Vec<_>, _>>()?;
 
-	Ok(CallData { pallet_name: Cow::Borrowed(pallet_name), ty: Cow::Borrowed(variant), arguments })
+	Ok(CallData { pallet_name: Cow::Borrowed(pallet_name), ty: Cow::Borrowed(variant), arguments, raw_arguments: Cow::Borrowed(raw_arguments) })
 }
 
 /// Decode the SCALE encoded data that, once signed, is used to construct a signed extrinsic. The encoded payload has the following shape:
 /// `(call_data, signed_extensions, additional_signed)`.
-pub fn decode_signer_payload<'a>(metadata: &'a Metadata, data: &mut &[u8]) -> Result<SignerPayload<'a>, DecodeError> {
+pub fn decode_signer_payload<'a, 'b>(metadata: &'a Metadata, data: &mut &'b [u8]) -> Result<SignerPayload<'a, 'b>, DecodeError> {
 	let call_data = decode_call_data(metadata, data)?;
 	let signed_extensions = decode_signed_extensions(metadata, data)?;
 	let additional_signed = decode_additional_signed(metadata, data)?;
@@ -423,7 +424,7 @@ pub fn decode_additional_signed<'a>(
 
 /// Decoded call data and associated type information.
 #[derive(Serialize, Debug, Clone, PartialEq)]
-pub struct CallData<'a> {
+pub struct CallData<'a, 'b> {
 	/// The name of the pallet
 	#[serde(borrow)]
 	pub pallet_name: Cow<'a, str>,
@@ -432,31 +433,34 @@ pub struct CallData<'a> {
 	pub ty: Cow<'a, scale_info::Variant<scale_info::form::PortableForm>>,
 	/// The decoded argument data
 	pub arguments: Vec<Value<TypeId>>,
+	/// The raw argument data bytes
+	pub raw_arguments: Cow<'b, [u8]>,
 }
 
-impl<'a> CallData<'a> {
-	pub fn into_owned(self) -> CallData<'static> {
+impl<'a, 'b> CallData<'a, 'b> {
+	pub fn into_owned(self) -> CallData<'static, 'static> {
 		CallData {
 			pallet_name: Cow::Owned(self.pallet_name.into_owned()),
 			ty: Cow::Owned(self.ty.into_owned()),
 			arguments: self.arguments,
+			raw_arguments: Cow::Owned(self.raw_arguments.into_owned()),
 		}
 	}
 }
 
 /// The result of successfully decoding an extrinsic.
 #[derive(Serialize, Debug, Clone, PartialEq)]
-pub struct Extrinsic<'a> {
+pub struct Extrinsic<'a, 'b> {
 	/// Decoded call data and associated type information about the call.
 	#[serde(borrow)]
-	pub call_data: CallData<'a>,
+	pub call_data: CallData<'a, 'b>,
 	/// The signature and signed extensions (if any) associated with the extrinsic
 	#[serde(borrow)]
 	pub signature: Option<ExtrinsicSignature<'a>>,
 }
 
-impl<'a> Extrinsic<'a> {
-	pub fn into_owned(self) -> Extrinsic<'static> {
+impl<'a, 'b> Extrinsic<'a, 'b> {
+	pub fn into_owned(self) -> Extrinsic<'static, 'static> {
 		Extrinsic { call_data: self.call_data.into_owned(), signature: self.signature.map(|s| s.into_owned()) }
 	}
 }
@@ -487,17 +491,17 @@ impl<'a> ExtrinsicSignature<'a> {
 
 /// The decoded signer payload.
 #[derive(Serialize, Debug, Clone, PartialEq)]
-pub struct SignerPayload<'a> {
+pub struct SignerPayload<'a, 'b> {
 	/// Decoded call data and associated type information about the call.
 	#[serde(borrow)]
-	pub call_data: CallData<'a>,
+	pub call_data: CallData<'a, 'b>,
 	/// Signed extensions as well as additional data to be signed. These
 	/// are packaged together in the metadata.
 	pub extensions: Vec<(Cow<'a, str>, SignedExtensionWithAdditional)>,
 }
 
-impl<'a> SignerPayload<'a> {
-	pub fn into_owned(self) -> SignerPayload<'static> {
+impl<'a, 'b> SignerPayload<'a, 'b> {
+	pub fn into_owned(self) -> SignerPayload<'static, 'static> {
 		SignerPayload {
 			call_data: self.call_data.into_owned(),
 			extensions: self.extensions.into_iter().map(|(k, v)| (Cow::Owned(k.into_owned()), v)).collect(),

@@ -14,6 +14,10 @@
 // You should have received a copy of the GNU General Public License
 // along with substrate-desub.  If not, see <http://www.gnu.org/licenses/>.
 
+use std::borrow::Borrow;
+use codec::{Compact, Decode};
+use sp_core::crypto::AccountId32;
+use desub_common::MultiAddress;
 use desub_current::{
 	decoder::{self, SignedExtensionWithAdditional},
 	value, Metadata, Value, ValueDef,
@@ -82,12 +86,14 @@ fn balance_transfer_signed() {
 	// Balances.transfer (amount: 12345)
 	let ext_bytes = &mut &*to_bytes("0x31028400d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d016ada9b477ef454972200e098f1186d4a2aeee776f1f6a68609797f5ba052906ad2427bdca865442158d118e2dfc82226077e4dfdff975d005685bab66eefa38a150200000500001cbd2d43530a44705ad088af313e18f80b53ef16b36177cd4b77b846f2a5f07ce5c0");
 	let ext = decoder::decode_extrinsic(&meta, ext_bytes).expect("can decode extrinsic");
+	let args: (MultiAddress, Compact<u128>) = Decode::decode(&mut ext.call_data.raw_arguments.borrow()).expect("can decode args");
 
 	assert!(ext_bytes.is_empty(), "No more bytes expected");
 	assert_eq!(ext.call_data.pallet_name, "Balances");
 	assert_eq!(&*ext.call_data.ty.name(), "transfer");
 	assert_eq!(ext.call_data.arguments.len(), 2);
 	assert_eq!(ext.call_data.arguments[1].clone().without_context(), Value::u128(12345));
+	assert_eq!(args.1.0, 12345);
 }
 
 #[test]
@@ -97,12 +103,14 @@ fn balance_transfer_all_signed() {
 	// Balances.transfer_all (keepalive: false)
 	let ext_bytes = &mut &*to_bytes("0x2d028400d43593c715fdd31c61141abd04a99fd6822c8558854ccde39a5684e7a56da27d01f0431ffe387134b4f84d92d3c3f1ac18c0f42237ad7dbd455bb0cf8a18efb1760528f052b2219ad1601d9a4719e1a446cf307bf6d7e9c56175bfe6e7bf8cbe81450304000504001cbd2d43530a44705ad088af313e18f80b53ef16b36177cd4b77b846f2a5f07c00");
 	let ext = decoder::decode_extrinsic(&meta, ext_bytes).expect("can decode extrinsic");
+	let args: (MultiAddress, bool) = Decode::decode(&mut ext.call_data.raw_arguments.borrow()).expect("can decode args");
 
 	assert!(ext_bytes.is_empty(), "No more bytes expected");
 	assert_eq!(ext.call_data.pallet_name, "Balances");
 	assert_eq!(&*ext.call_data.ty.name(), "transfer_all");
 	assert_eq!(ext.call_data.arguments.len(), 2);
 	assert_eq!(ext.call_data.arguments[1].clone().without_context(), Value::bool(false));
+	assert_eq!(args.1, false);
 }
 
 /// This test is interesting because:
